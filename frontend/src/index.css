@@ -2,6 +2,89 @@
   box-sizing: border-box;
 }
 
+/* ─── Quill rich-text editor ──────────────────────────────── */
+.quill-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.quill-wrapper .ql-container.ql-snow {
+  flex: 1;
+  overflow-y: auto;
+  font-family: Inter, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.7;
+  border-radius: 0 0 16px 16px;
+  border-color: #dbe2ea;
+}
+
+.quill-wrapper .ql-toolbar.ql-snow {
+  border-radius: 16px 16px 0 0;
+  border-color: #dbe2ea;
+  background: #f8fafc;
+}
+
+.quill-wrapper .ql-editor {
+  min-height: 320px;
+  max-height: calc(100vh - 360px);
+}
+
+/* ─── Document type badge ─────────────────────────────────── */
+.type-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+
+/* ─── Export dropdown ─────────────────────────────────────── */
+.export-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  z-index: 200;
+  overflow: hidden;
+  min-width: 160px;
+}
+
+.export-dropdown button {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  text-align: left;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #1f2937;
+}
+
+.export-dropdown button:hover {
+  background: #f8fafc;
+}
+
+/* ─── Code editor textarea ────────────────────────────────── */
+.editor-textarea.code-mode {
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-color: #333;
+}
+
+.editor-textarea.code-mode:focus {
+  border-color: #569cd6;
+}
+
 body {
   margin: 0;
   font-family: Inter, Arial, sans-serif;

@@ -16,6 +16,15 @@ const server = http.createServer(app);
 app.use(cors());
 app.use(express.json());
 
+const authRoutes = require("./routes/auth");
+const docsRoutes = require("./routes/docs");
+const authMiddleware = require("./middleware/auth");
+
+app.use("/api/auth", authRoutes);
+app.use("/api/docs", docsRoutes);
+
+const jwt = require("jsonwebtoken");
+
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -52,24 +61,20 @@ function getDefaultContent() {
   return "Welcome to DocuSync.\n\nStart editing collaboratively here.\n\nYou can save snapshots and restore them anytime.";
 }
 
-async function getOrCreateDocument(roomId) {
+async function getDocWithAccess(roomId, userId) {
   let doc = await Document.findOne({ roomId });
+  
+  if (!doc) throw new Error("NOT_FOUND");
 
-  if (!doc) {
-    doc = await Document.create({
-      roomId,
-      content: getDefaultContent(),
-      updatedAt: new Date(),
-    });
-    
-    await ActivityLog.create({
-      roomId,
-      type: "system",
-      message: "Document created",
-      userName: "System",
-      userColor: "#64748b",
-      timestamp: new Date(),
-    });
+  if (doc.isPublic) return doc;
+  
+  if (!userId) throw new Error("FORBIDDEN");
+
+  const isOwner = doc.ownerId.toString() === userId.toString();
+  const isCollab = doc.collaborators.some(id => id.toString() === userId.toString());
+
+  if (!isOwner && !isCollab) {
+    throw new Error("FORBIDDEN");
   }
 
   return doc;
@@ -84,10 +89,10 @@ async function addActivity(roomId, activity) {
   });
 }
 
-app.get("/api/document/:roomId", async (req, res) => {
+app.get("/api/document/:roomId", authMiddleware, async (req, res) => {
   try {
     const roomId = req.params.roomId;
-    const doc = await getOrCreateDocument(roomId);
+    const doc = await getDocWithAccess(roomId, req.user.userId);
     const snapshots = await Snapshot.find({ roomId }).sort({ timestamp: 1 });
     const activityLogs = await ActivityLog.find({ roomId }).sort({ timestamp: 1 });
     
@@ -97,17 +102,19 @@ app.get("/api/document/:roomId", async (req, res) => {
       activityLogs
     });
   } catch (error) {
+    if (error.message === "NOT_FOUND") return res.status(404).json({ error: "Document not found" });
+    if (error.message === "FORBIDDEN") return res.status(403).json({ error: "Access denied" });
     console.error("Fetch document error:", error);
     res.status(500).json({ error: "Failed to fetch document" });
   }
 });
 
-app.post("/api/document/:roomId/snapshot", async (req, res) => {
+app.post("/api/document/:roomId/snapshot", authMiddleware, async (req, res) => {
   try {
     const { content, savedBy, savedByColor, mode } = req.body;
     const roomId = req.params.roomId;
 
-    const doc = await getOrCreateDocument(roomId);
+    const doc = await getDocWithAccess(roomId, req.user.userId);
     const finalContent = typeof content === "string" ? content : "";
 
     const latestSnapshot = await Snapshot.findOne({ roomId }).sort({ timestamp: -1 });
@@ -151,23 +158,22 @@ app.post("/api/document/:roomId/snapshot", async (req, res) => {
 
     res.json(doc);
   } catch (error) {
+    if (error.message === "NOT_FOUND") return res.status(404).json({ error: "Document not found" });
+    if (error.message === "FORBIDDEN") return res.status(403).json({ error: "Access denied" });
     console.error("Save snapshot error:", error);
     res.status(500).json({ error: "Failed to save snapshot" });
   }
 });
 
-app.post("/api/document/:roomId/restore/:snapshotId", async (req, res) => {
+app.post("/api/document/:roomId/restore/:snapshotId", authMiddleware, async (req, res) => {
   try {
     const { restoredBy, restoredByColor } = req.body;
     const { roomId, snapshotId } = req.params;
 
     console.log("Restore request:", { roomId, snapshotId, restoredBy });
 
-    const doc = await Document.findOne({ roomId });
-    if (!doc) {
-      return res.status(404).json({ error: "Document not found" });
-    }
-
+    const doc = await getDocWithAccess(roomId, req.user.userId);
+    
     const snapshot = await Snapshot.findOne({ _id: snapshotId, roomId });
 
     if (!snapshot) {
@@ -204,6 +210,8 @@ app.post("/api/document/:roomId/restore/:snapshotId", async (req, res) => {
       activityLogs: activityLogs,
     });
   } catch (error) {
+    if (error.message === "NOT_FOUND") return res.status(404).json({ error: "Document not found" });
+    if (error.message === "FORBIDDEN") return res.status(403).json({ error: "Access denied" });
     console.error("Restore error full:", error);
     res.status(500).json({
       error: "Failed to restore snapshot",
@@ -212,12 +220,12 @@ app.post("/api/document/:roomId/restore/:snapshotId", async (req, res) => {
   }
 });
 
-app.post("/api/document/:roomId/reset", async (req, res) => {
+app.post("/api/document/:roomId/reset", authMiddleware, async (req, res) => {
   try {
     const { resetBy, resetByColor } = req.body;
     const { roomId } = req.params;
 
-    let doc = await getOrCreateDocument(roomId);
+    let doc = await getDocWithAccess(roomId, req.user.userId);
 
     doc.content = getDefaultContent();
     doc.updatedAt = new Date();
@@ -252,6 +260,8 @@ app.post("/api/document/:roomId/reset", async (req, res) => {
       activityLogs: activityLogs,
     });
   } catch (error) {
+    if (error.message === "NOT_FOUND") return res.status(404).json({ error: "Document not found" });
+    if (error.message === "FORBIDDEN") return res.status(403).json({ error: "Access denied" });
     console.error("Reset error:", error);
     res.status(500).json({ error: "Failed to reset document" });
   }
@@ -260,8 +270,21 @@ app.post("/api/document/:roomId/reset", async (req, res) => {
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  socket.on("join-room", async ({ roomId, userName, color }) => {
+  socket.on("join-room", async ({ roomId, userName, color, token }) => {
     try {
+      let verifiedUserId = null;
+      if (token) {
+        try {
+          const decoded = jwt.verify(token, process.env.JWT_SECRET || "fallback_secret_for_dev_mode");
+          verifiedUserId = decoded.userId;
+        } catch (e) {
+          console.error("Socket token verification failed");
+        }
+      }
+
+      // Check access strictly
+      await getDocWithAccess(roomId, verifiedUserId);
+
       socket.join(roomId);
       socket.data.roomId = roomId;
       socket.data.userName = userName;
@@ -282,8 +305,6 @@ io.on("connection", (socket) => {
           color,
         });
       }
-
-      await getOrCreateDocument(roomId);
 
       await addActivity(roomId, {
         type: "join",
@@ -306,12 +327,23 @@ io.on("connection", (socket) => {
       io.to(roomId).emit("users-updated", activeUsersByRoom[roomId]);
       io.to(roomId).emit("activity-updated", activityLogs);
     } catch (error) {
-      console.error("Join room error:", error);
+      console.error("Join room error:", error.message);
+      socket.emit("join-error", { error: "Access denied or document missing" });
     }
   });
 
-  socket.on("send-changes", async ({ roomId, content, userName }) => {
+  socket.on("send-changes", async ({ roomId, content, userName, token }) => {
     try {
+      let verifiedUserId = null;
+      if (token) {
+        try {
+          const decoded = jwt.verify(token, process.env.JWT_SECRET || "fallback_secret_for_dev_mode");
+          verifiedUserId = decoded.userId;
+        } catch (e) {}
+      }
+      // Re-verify on edit to ensure security persists
+      await getDocWithAccess(roomId, verifiedUserId);
+
       socket.to(roomId).emit("receive-changes", {
         content,
         userName,

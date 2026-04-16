@@ -1,146 +1,41 @@
-import { useMemo, useState } from "react";
+import React, { useState } from "react";
+import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import JoinScreen from "./components/JoinScreen";
-import Header from "./components/Header";
-import EditorPanel from "./components/EditorPanel";
-import Sidebar from "./components/Sidebar";
-import DiffViewer from "./components/DiffViewer";
-import ReplayViewer from "./components/ReplayViewer";
-
-import { useSocket } from "./hooks/useSocket";
-import { useDocument } from "./hooks/useDocument";
-import { useAutosave } from "./hooks/useAutosave";
-
-const SOCKET_URL = "http://localhost:5001";
+import Dashboard from "./views/Dashboard";
+import DocumentView from "./views/DocumentView";
 
 function App() {
-  const [joined, setJoined] = useState(false);
-  const [userName, setUserName] = useState("");
-  const [userColor, setUserColor] = useState("");
+  const [token, setToken] = useState(localStorage.getItem("docu-sync-token") || "");
 
-  const [roomId] = useState("docu-sync-fresh-room-1");
-  const API_URL = `http://localhost:5001/api/document/${roomId}`;
-
-  const currentUser = useMemo(() => ({ userName, color: userColor }), [userName, userColor]);
-
-  const socket = useSocket(SOCKET_URL, joined, roomId, userName, userColor);
-
-  const {
-    content,
-    snapshots,
-    activityLogs,
-    activeUsers,
-    lastEditedBy,
-    remoteCursors,
-    updateContent,
-    sendCursorMove,
-    lastSnapshotContentRef,
-  } = useDocument(socket, roomId, userName, userColor);
-
-  const { saveSnapshot, savingSnapshot, autoSaveMessage } = useAutosave(
-    "http://localhost:5001/api/document/" + roomId,
-    content,
-    roomId,
-    userName,
-    userColor,
-    lastSnapshotContentRef
-  );
-
-  const [restoringSnapshotId, setRestoringSnapshotId] = useState("");
-  const [selectedSnapshot, setSelectedSnapshot] = useState(null);
-  const [replayOpen, setReplayOpen] = useState(false);
-
-  const handleJoin = ({ name, color }) => {
-    setUserName(name);
-    setUserColor(color);
-    setJoined(true);
+  const handleAuth = (authData) => {
+    localStorage.setItem("docu-sync-userName", authData.name);
+    localStorage.setItem("docu-sync-userId", authData.userId);
+    localStorage.setItem("docu-sync-userColor", authData.color);
+    // Token is already set in localStorage by JoinScreen, but we sync state here
+    setToken(authData.token);
   };
-
-  const handleManualSnapshot = async () => {
-    await saveSnapshot(content, "manual");
-  };
-
-  const handleRestoreSnapshot = async (snapshotId) => {
-    try {
-      setRestoringSnapshotId(snapshotId);
-
-      const res = await fetch(`${API_URL}/restore/${snapshotId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          restoredBy: userName,
-          restoredByColor: userColor,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || data.details || "Failed to restore snapshot");
-      }
-
-      setSelectedSnapshot(null);
-    } catch (error) {
-      alert(error.message || "Snapshot restore failed");
-    } finally {
-      setRestoringSnapshotId("");
-    }
-  };
-
-  if (!joined) {
-    return <JoinScreen onJoin={handleJoin} />;
-  }
 
   return (
-    <div className="app-shell">
-      <Header
-        activeUsers={activeUsers}
-        currentUser={currentUser}
-        onSaveSnapshot={handleManualSnapshot}
-        savingSnapshot={savingSnapshot}
-        autoSaveMessage={autoSaveMessage}
-      />
-
-      <div className="main-layout">
-        <EditorPanel
-          content={content}
-          onChange={updateContent}
-          lastEditedBy={lastEditedBy}
-          remoteCursors={remoteCursors}
-          sendCursorMove={sendCursorMove}
+    <Router>
+      <Routes>
+        <Route 
+          path="/" 
+          element={token ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />} 
         />
-
-        <Sidebar
-          snapshots={snapshots}
-          activityLogs={activityLogs}
-          onRestoreSnapshot={handleRestoreSnapshot}
-          restoringSnapshotId={restoringSnapshotId}
-          setSelectedSnapshot={setSelectedSnapshot}
-          selectedSnapshot={selectedSnapshot}
-          onOpenReplay={() => setReplayOpen(true)}
+        <Route
+          path="/login"
+          element={token ? <Navigate to="/dashboard" replace /> : <JoinScreen onJoin={handleAuth} />}
         />
-      </div>
-
-      {selectedSnapshot && (
-        <DiffViewer
-          oldText={selectedSnapshot.content}
-          newText={content}
-          snapshotUserName={selectedSnapshot.savedBy}
-          snapshotUserColor={selectedSnapshot.savedByColor}
-          currentUserName={currentUser.userName}
-          currentUserColor={currentUser.color}
-          onClose={() => setSelectedSnapshot(null)}
+        <Route
+          path="/dashboard"
+          element={token ? <Dashboard setToken={setToken} /> : <Navigate to="/login" replace />}
         />
-      )}
-
-      {replayOpen && (
-        <ReplayViewer
-          snapshots={snapshots}
-          onClose={() => setReplayOpen(false)}
+        <Route 
+          path="/doc/:roomId" 
+          element={<DocumentView />} 
         />
-      )}
-    </div>
+      </Routes>
+    </Router>
   );
 }
 
