@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 
-export const useSocket = (serverUrl, joined, roomId, userName, userColor) => {
+export const useSocket = (serverUrl, joined, roomId, userName, userColor, userId, token) => {
   const [socket, setSocket] = useState(null);
 
   useEffect(() => {
@@ -14,6 +14,8 @@ export const useSocket = (serverUrl, joined, roomId, userName, userColor) => {
       roomId,
       userName,
       color: userColor,
+      userId,
+      token
     });
 
     setSocket(newSocket);
@@ -21,7 +23,7 @@ export const useSocket = (serverUrl, joined, roomId, userName, userColor) => {
     return () => {
       newSocket.disconnect();
     };
-  }, [serverUrl, joined, roomId, userName, userColor]);
+  }, [serverUrl, joined, roomId, userName, userColor, userId, token]);
 
   return socket;
 };

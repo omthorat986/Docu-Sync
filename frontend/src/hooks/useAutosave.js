@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 
-export const useAutosave = (apiUrl, content, roomId, userName, userColor, lastSnapshotContentRef) => {
+export const useAutosave = (apiUrl, content, roomId, userName, userColor, lastSnapshotContentRef, token) => {
   const [savingSnapshot, setSavingSnapshot] = useState(false);
   const [autoSaveMessage, setAutoSaveMessage] = useState("Auto Snapshot On");
   
@@ -20,6 +20,7 @@ export const useAutosave = (apiUrl, content, roomId, userName, userColor, lastSn
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
         },
         body: JSON.stringify({
           content: contentToSave,

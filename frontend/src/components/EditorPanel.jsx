@@ -1,78 +1,287 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
+import Quill from 'quill';
+import QuillCursors from 'quill-cursors';
+import 'quill/dist/quill.snow.css';
 import { getCaretCoordinates } from '../utils/caretHelper';
 
-function EditorPanel({ content, onChange, lastEditedBy, remoteCursors, sendCursorMove }) {
+// Register quill-cursors once
+Quill.register('modules/cursors', QuillCursors);
+
+// ─── Export helpers ─────────────────────────────────────────────────────────
+function exportTxt(plainText, title) {
+  const blob = new Blob([plainText], { type: 'text/plain' });
+  triggerDownload(blob, `${title}.txt`);
+}
+
+function exportHtml(html, title) {
+  const full = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+<style>body{font-family:sans-serif;max-width:800px;margin:40px auto;line-height:1.7}</style>
+</head><body>${html}</body></html>`;
+  const blob = new Blob([full], { type: 'text/html' });
+  triggerDownload(blob, `${title}.html`);
+}
+
+async function exportPdf(html, title) {
+  const html2pdf = (await import('html2pdf.js')).default;
+  const container = document.createElement('div');
+  container.innerHTML = `<h2>${escapeHtml(title)}</h2>${html}`;
+  container.style.cssText = 'padding:24px;font-family:sans-serif;line-height:1.7';
+  document.body.appendChild(container);
+  await html2pdf()
+    .set({ filename: `${title}.pdf`, margin: 12, html2canvas: { scale: 2 } })
+    .from(container).save();
+  document.body.removeChild(container);
+}
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─── Rich-text Quill editor (direct DOM init, React 19 safe) ─────────────────
+function RichEditor({ content, onChange, remoteCursors, socket, roomId, userName, userColor }) {
+  const containerRef = useRef(null);
+  const quillRef = useRef(null);
+  const cursorsModuleRef = useRef(null);
+  const isRemoteRef = useRef(false);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange; // keep latest without re-init
+
+  // Init Quill once on mount
+  useEffect(() => {
+    if (!containerRef.current || quillRef.current) return;
+
+    const q = new Quill(containerRef.current, {
+      theme: 'snow',
+      placeholder: 'Start collaborating...',
+      modules: {
+        toolbar: [
+          [{ header: [1, 2, 3, false] }],
+          ['bold', 'italic', 'underline', 'strike'],
+          [{ color: [] }, { background: [] }],
+          [{ list: 'ordered' }, { list: 'bullet' }],
+          ['blockquote', 'code-block', 'link'],
+          ['clean'],
+        ],
+        cursors: { transformOnTextChange: true },
+      },
+    });
+
+    quillRef.current = q;
+    cursorsModuleRef.current = q.getModule('cursors');
+
+    // Load initial content
+    try {
+      const delta = JSON.parse(content);
+      q.setContents(delta, 'silent');
+    } catch {
+      q.setText(content || '', 'silent');
+    }
+
+    // Listen for local edits
+    q.on('text-change', (delta, oldDelta, source) => {
+      if (isRemoteRef.current || source !== 'user') return;
+      const fullDelta = q.getContents();
+      onChangeRef.current(JSON.stringify(fullDelta));
+    });
+
+    return () => {
+      // Quill 1.x has no official destroy(), remove the toolbar manually
+      const toolbar = q.getModule('toolbar');
+      if (toolbar && toolbar.container) toolbar.container.remove();
+      q.off('text-change');
+      quillRef.current = null;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Apply incoming content changes from socket (without echo loop)
+  useEffect(() => {
+    if (!socket) return;
+
+    const handler = (data) => {
+      const q = quillRef.current;
+      if (!q || !data.content) return;
+      isRemoteRef.current = true;
+      try {
+        const incoming = JSON.parse(data.content);
+        const current  = JSON.stringify(q.getContents());
+        if (JSON.stringify(incoming) !== current) {
+          const sel = q.getSelection();
+          q.setContents(incoming, 'silent');
+          if (sel) q.setSelection(sel, 'silent');
+        }
+      } catch {
+        // plain-text fallback
+        q.setText(data.content || '', 'silent');
+      }
+      isRemoteRef.current = false;
+    };
+
+    socket.on('receive-changes', handler);
+    return () => socket.off('receive-changes', handler);
+  }, [socket]);
+
+  // Render remote cursors via quill-cursors
+  useEffect(() => {
+    const cursors = cursorsModuleRef.current;
+    if (!cursors || !remoteCursors) return;
+    Object.entries(remoteCursors).forEach(([uid, data]) => {
+      try {
+        cursors.createCursor(uid, data.userName, data.userColor);
+        cursors.moveCursor(uid, { index: data.index || 0, length: 0 });
+      } catch {}
+    });
+  }, [remoteCursors]);
+
+  // Export helpers exposed via window for the parent component
+  const getPlainText = () => quillRef.current?.getText() || '';
+  const getHtml     = () => containerRef.current?.querySelector('.ql-editor')?.innerHTML || '';
+
+  // Expose methods via ref trick
+  if (containerRef._exportRef === undefined) {
+    containerRef._exportRef = { getPlainText, getHtml };
+  }
+
+  return (
+    <div className="quill-wrapper">
+      <div ref={containerRef} />
+    </div>
+  );
+}
+
+// ─── Plain-text / code editor ────────────────────────────────────────────────
+function PlainEditor({ content, onChange, remoteCursors, sendCursorMove, placeholder, isCode }) {
   const textareaRef = useRef(null);
 
-  const handleCaretMove = () => {
+  const handleCaretMove = useCallback(() => {
     if (textareaRef.current && sendCursorMove) {
       sendCursorMove(textareaRef.current.selectionStart);
     }
-  };
+  }, [sendCursorMove]);
 
   const renderCursors = () => {
     if (!textareaRef.current || !remoteCursors) return null;
-
-    return Object.entries(remoteCursors).map(([userId, cursorData]) => {
-      // Calculate pixel coordinates for this remote cursor
-      const coords = getCaretCoordinates(textareaRef.current, cursorData.index);
-      
-      return (
-        <div
-          key={userId}
-          className="remote-cursor"
-          style={{
-            transform: `translate(${coords.left}px, ${coords.top}px)`,
-            height: `${coords.height || 20}px`,
-            borderLeft: `2px solid ${cursorData.userColor}`
-          }}
-        >
-          <div 
-            className="remote-cursor-label" 
-            style={{ backgroundColor: cursorData.userColor }}
-          >
-            {cursorData.userName}
+    return Object.entries(remoteCursors).map(([uid, cur]) => {
+      try {
+        const coords = getCaretCoordinates(textareaRef.current, cur.index);
+        return (
+          <div key={uid} className="remote-cursor"
+            style={{ transform: `translate(${coords.left}px,${coords.top}px)`, height: `${coords.height || 20}px`, borderLeft: `2px solid ${cur.userColor}` }}>
+            <div className="remote-cursor-label" style={{ backgroundColor: cur.userColor }}>{cur.userName}</div>
           </div>
-        </div>
-      );
+        );
+      } catch { return null; }
     });
   };
 
   return (
+    <div className="editor-container" style={{ position: 'relative', flex: 1, display: 'flex' }}>
+      <textarea
+        ref={textareaRef}
+        className={`editor-textarea${isCode ? ' code-mode' : ''}`}
+        value={content}
+        onChange={(e) => { onChange(e.target.value); handleCaretMove(); }}
+        onSelect={handleCaretMove} onClick={handleCaretMove} onKeyUp={handleCaretMove}
+        placeholder={placeholder || 'Start typing...'}
+      />
+      {renderCursors()}
+    </div>
+  );
+}
+
+// ─── Main EditorPanel ────────────────────────────────────────────────────────
+function EditorPanel({
+  content, onChange, lastEditedBy,
+  remoteCursors, sendCursorMove,
+  docType = 'text', docTitle = 'Document',
+  socket, roomId, userName, userColor,
+}) {
+  const [exportOpen, setExportOpen] = useState(false);
+  const richEditorRef = useRef(null);
+
+  const handleExport = async (format) => {
+    setExportOpen(false);
+    try {
+      // For rich-text, grab live DOM; for others use raw content
+      let plainText = content;
+      let html = content;
+
+      if (docType === 'text') {
+        const editorEl = document.querySelector('.ql-editor');
+        html = editorEl ? editorEl.innerHTML : content;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        plainText = tmp.innerText;
+      } else {
+        html = `<pre style="font-family:monospace;white-space:pre-wrap">${escapeHtml(content)}</pre>`;
+        plainText = content;
+      }
+
+      if (format === 'txt')  exportTxt(plainText, docTitle);
+      if (format === 'html') exportHtml(html, docTitle);
+      if (format === 'pdf')  await exportPdf(html, docTitle);
+    } catch (err) {
+      alert('Export failed: ' + err.message);
+    }
+  };
+
+  const typeBadge = { text: { bg: '#eef2ff', color: '#4f46e5' }, code: { bg: '#fef9c3', color: '#854d0e' }, notes: { bg: '#f0fdf4', color: '#166534' } }[docType] || {};
+
+  return (
     <section className="editor-card">
       <div className="section-header">
-        <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <h3>Shared Document</h3>
-          <p>Edit in multiple tabs or devices to test real-time sync</p>
+          <span className="type-badge" style={{ background: typeBadge.bg, color: typeBadge.color }}>{docType}</span>
         </div>
-        <div className="live-indicator">
-          <span className="live-dot" />
-          Live Sync
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ position: 'relative' }}>
+            <button className="secondary-btn" style={{ minHeight: 30, fontSize: 12 }}
+              onClick={() => setExportOpen(o => !o)}>
+              ⬇ Export
+            </button>
+            {exportOpen && (
+              <div className="export-dropdown">
+                <button onClick={() => handleExport('txt')}>📄 Export as TXT</button>
+                <button onClick={() => handleExport('html')}>🌐 Export as HTML</button>
+                <button onClick={() => handleExport('pdf')}>📑 Export as PDF</button>
+              </div>
+            )}
+          </div>
+          <div className="live-indicator"><span className="live-dot" />Live Sync</div>
         </div>
       </div>
 
-      {lastEditedBy ? (
-        <div className="edited-banner">{lastEditedBy} is making changes</div>
-      ) : (
-        <div className="edited-banner muted">Everyone is synced</div>
-      )}
+      {lastEditedBy
+        ? <div className="edited-banner">{lastEditedBy} is making changes</div>
+        : <div className="edited-banner muted">Everyone is synced</div>}
 
-      <div className="editor-container" style={{ position: 'relative', flex: 1, display: 'flex' }}>
-        <textarea
-          ref={textareaRef}
-          className="editor-textarea"
-          value={content}
-          onChange={(e) => {
-            onChange(e.target.value);
-            handleCaretMove();
-          }}
-          onSelect={handleCaretMove}
-          onClick={handleCaretMove}
-          onKeyUp={handleCaretMove}
-          placeholder="Start typing..."
+      {docType === 'text' ? (
+        <RichEditor
+          ref={richEditorRef}
+          content={content}
+          onChange={onChange}
+          remoteCursors={remoteCursors}
+          socket={socket}
+          roomId={roomId}
+          userName={userName}
+          userColor={userColor}
         />
-        {renderCursors()}
-      </div>
+      ) : (
+        <PlainEditor
+          content={content}
+          onChange={onChange}
+          remoteCursors={remoteCursors}
+          sendCursorMove={sendCursorMove}
+          isCode={docType === 'code'}
+          placeholder={docType === 'code' ? '// Start coding...' : 'Write your notes...'}
+        />
+      )}
     </section>
   );
 }

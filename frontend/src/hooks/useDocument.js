@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 
-export const useDocument = (socket, roomId, userName, userColor) => {
+export const useDocument = (socket, roomId, userName, userColor, token) => {
+  const [documentMeta, setDocumentMeta] = useState({ title: 'Untitled Document', isPublic: false, ownerId: null, type: 'text' });
   const [content, setContent] = useState("");
   const [activeUsers, setActiveUsers] = useState([]);
   const [snapshots, setSnapshots] = useState([]);
@@ -10,8 +11,10 @@ export const useDocument = (socket, roomId, userName, userColor) => {
 
   const editTimeoutRef = useRef(null);
   const logTimeoutRef = useRef(null);
-  const lastSnapshotContentRef = useRef("");
+  const debounceRef = useRef(null);       // 300ms debounce for socket emit
+  const lastSnapshotContentRef = useRef('');
   const cursorThrottleRef = useRef(null);
+  const isRemoteChange = useRef(false);   // prevent echo loops
 
   useEffect(() => {
     if (!socket) return;
@@ -30,11 +33,21 @@ export const useDocument = (socket, roomId, userName, userColor) => {
       lastSnapshotContentRef.current = latestSnapshot
         ? latestSnapshot.content
         : data.content || "";
+        
+      setDocumentMeta({
+        title: data.title || 'Untitled Document',
+        isPublic: data.isPublic,
+        ownerId: data.ownerId,
+        type: data.type || 'text',
+      });
     };
 
     const handleReceiveChanges = (data) => {
-      setContent(data.content || "");
-      setLastEditedBy(data.userName || "");
+      if (isRemoteChange.current) return;
+      isRemoteChange.current = true;
+      setContent(data.content || '');
+      setLastEditedBy(data.userName || '');
+      isRemoteChange.current = false;
     };
 
     const handleUsersUpdated = (users) => {
@@ -54,7 +67,9 @@ export const useDocument = (socket, roomId, userName, userColor) => {
     };
 
     const handleDocumentUpdated = (data) => {
-      setContent(data.content || "");
+      isRemoteChange.current = true;
+      setContent(data.content || '');
+      isRemoteChange.current = false;
     };
 
     const handleCursorUpdate = ({ userId, cursor }) => {
@@ -93,35 +108,31 @@ export const useDocument = (socket, roomId, userName, userColor) => {
       
       if (editTimeoutRef.current) clearTimeout(editTimeoutRef.current);
       if (logTimeoutRef.current) clearTimeout(logTimeoutRef.current);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
       if (cursorThrottleRef.current) clearTimeout(cursorThrottleRef.current);
     };
   }, [socket]);
 
   const updateContent = (newContent) => {
+    if (isRemoteChange.current) return;
     setContent(newContent);
     setLastEditedBy(userName);
 
     if (socket) {
-      socket.emit("send-changes", {
-        roomId,
-        content: newContent,
-        userName,
-      });
+      // 300ms debounce to prevent socket spam
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        socket.emit('send-changes', { roomId, content: newContent, userName, token });
+      }, 300);
 
       if (logTimeoutRef.current) clearTimeout(logTimeoutRef.current);
       logTimeoutRef.current = setTimeout(() => {
-        socket.emit("log-edit", {
-          roomId,
-          userName,
-          userColor,
-        });
+        socket.emit('log-edit', { roomId, userName, userColor });
       }, 1200);
     }
 
     if (editTimeoutRef.current) clearTimeout(editTimeoutRef.current);
-    editTimeoutRef.current = setTimeout(() => {
-      setLastEditedBy("");
-    }, 1800);
+    editTimeoutRef.current = setTimeout(() => setLastEditedBy(''), 1800);
   };
 
   const sendCursorMove = (position) => {
@@ -145,6 +156,7 @@ export const useDocument = (socket, roomId, userName, userColor) => {
   };
 
   return {
+    documentMeta,
     content,
     snapshots,
     activityLogs,

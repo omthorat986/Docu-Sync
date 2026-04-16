@@ -2,7 +2,12 @@ const mongoose = require("mongoose");
 
 const DocumentSchema = new mongoose.Schema(
   {
-    roomId: { type: String, required: true, unique: true },
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    roomId: { type: String, required: true, unique: true, index: true },
+    title: { type: String, default: "Untitled Document" },
+    collaborators: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    isPublic: { type: Boolean, default: false },
+    type: { type: String, enum: ["text", "code", "notes"], default: "text" },
     content: {
       type: String,
       default:
