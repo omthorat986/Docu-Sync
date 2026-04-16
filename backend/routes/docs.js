@@ -109,6 +109,13 @@ router.put('/:roomId/rename', async (req, res) => {
     doc.title = title.trim();
     await doc.save();
 
+    if (req.io) {
+      req.io.to(req.params.roomId).emit('document-meta-updated', {
+        title: doc.title,
+        isPublic: doc.isPublic
+      });
+    }
+
     res.json({ success: true, title: doc.title });
   } catch (error) {
     console.error('Rename doc error:', error);
@@ -130,6 +137,13 @@ router.put('/:roomId/visibility', async (req, res) => {
 
     doc.isPublic = !!isPublic;
     await doc.save();
+
+    if (req.io) {
+      req.io.to(req.params.roomId).emit('document-meta-updated', {
+        title: doc.title,
+        isPublic: doc.isPublic
+      });
+    }
 
     res.json({ success: true, isPublic: doc.isPublic });
   } catch (error) {

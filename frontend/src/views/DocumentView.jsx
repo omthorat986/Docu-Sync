@@ -1,10 +1,11 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Header from '../components/Header';
 import EditorPanel from '../components/EditorPanel';
 import Sidebar from '../components/Sidebar';
 import DiffViewer from '../components/DiffViewer';
 import ReplayViewer from '../components/ReplayViewer';
+import AnalyticsModal from '../components/AnalyticsModal';
 import { useSocket } from '../hooks/useSocket';
 import { useDocument } from '../hooks/useDocument';
 import { useAutosave } from '../hooks/useAutosave';
@@ -51,11 +52,14 @@ function DocumentView() {
     lastSnapshotContentRef,
   } = useDocument(socket, roomId, userName, userColor, token);
 
-  // Allow Header to optimistically update the title in meta without a full reload
+  // Allow Header to optimistically update the title and visibility in meta without a full reload
   const [localTitle, setLocalTitle] = useState(null);
-  const effectiveMeta = localTitle
-    ? { ...documentMeta, title: localTitle }
-    : documentMeta;
+  const [localVisibility, setLocalVisibility] = useState(null);
+  const effectiveMeta = {
+    ...documentMeta,
+    ...(localTitle != null ? { title: localTitle } : {}),
+    ...(localVisibility != null ? { isPublic: localVisibility } : {}),
+  };
 
   const { saveSnapshot, savingSnapshot, autoSaveMessage } = useAutosave(
     API_URL, content, roomId, userName, userColor, lastSnapshotContentRef, token
@@ -64,8 +68,33 @@ function DocumentView() {
   const [restoringSnapshotId, setRestoringSnapshotId] = useState('');
   const [selectedSnapshot, setSelectedSnapshot] = useState(null);
   const [replayOpen, setReplayOpen] = useState(false);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
 
-  const handleManualSnapshot = async () => saveSnapshot(content, 'manual');
+  const [sidebarWidth, setSidebarWidth] = useState(380);
+  const [isResizing, setIsResizing] = useState(false);
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+
+  const startResizing = useCallback((e) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const handleMouseMove = (e) => {
+      const newWidth = window.innerWidth - e.clientX - 32;
+      if (newWidth >= 280 && newWidth <= 800) setSidebarWidth(newWidth);
+    };
+    const stopResizing = () => setIsResizing(false);
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopResizing);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopResizing);
+    };
+  }, [isResizing]);
+
+  const handleManualSnapshot = async (tag = '') => saveSnapshot(content, 'manual', tag);
 
   const handleRestoreSnapshot = async (snapshotId) => {
     try {
@@ -98,32 +127,51 @@ function DocumentView() {
         roomId={roomId}
         documentMeta={effectiveMeta}
         onTitleChange={setLocalTitle}
+        onVisibilityChange={setLocalVisibility}
+        onOpenAnalytics={() => setAnalyticsOpen(true)}
       />
 
       <div className="main-layout">
-        <EditorPanel
-          content={content}
-          onChange={updateContent}
-          lastEditedBy={lastEditedBy}
-          remoteCursors={remoteCursors}
-          sendCursorMove={sendCursorMove}
-          docType={documentMeta?.type || 'text'}
-          docTitle={effectiveMeta?.title || 'Document'}
-          socket={socket}
-          roomId={roomId}
-          userName={userName}
-          userColor={userColor}
-        />
+        <div className="editor-wrapper">
+          <EditorPanel
+            content={content}
+            onChange={updateContent}
+            lastEditedBy={lastEditedBy}
+            remoteCursors={remoteCursors}
+            sendCursorMove={sendCursorMove}
+            docType={documentMeta?.type || 'text'}
+            docTitle={effectiveMeta?.title || 'Document'}
+            socket={socket}
+            roomId={roomId}
+            userName={userName}
+            userColor={userColor}
+            sidebarVisible={sidebarVisible}
+            onToggleSidebar={() => setSidebarVisible(!sidebarVisible)}
+          />
+        </div>
 
-        <Sidebar
-          snapshots={snapshots}
-          activityLogs={activityLogs}
-          onRestoreSnapshot={handleRestoreSnapshot}
-          restoringSnapshotId={restoringSnapshotId}
-          setSelectedSnapshot={setSelectedSnapshot}
-          selectedSnapshot={selectedSnapshot}
-          onOpenReplay={() => setReplayOpen(true)}
-        />
+        {sidebarVisible && (
+          <>
+            <div 
+              className={`resizer-handle ${isResizing ? 'is-resizing' : ''}`}
+              onMouseDown={startResizing}
+            >
+              <div className="resizer-line" />
+            </div>
+
+            <div className="sidebar-wrapper" style={{ width: sidebarWidth }}>
+              <Sidebar
+                snapshots={snapshots}
+                activityLogs={activityLogs}
+                onRestoreSnapshot={handleRestoreSnapshot}
+                restoringSnapshotId={restoringSnapshotId}
+                setSelectedSnapshot={setSelectedSnapshot}
+                selectedSnapshot={selectedSnapshot}
+                onOpenReplay={() => setReplayOpen(true)}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       {selectedSnapshot && (
@@ -142,6 +190,13 @@ function DocumentView() {
         <ReplayViewer
           snapshots={snapshots}
           onClose={() => setReplayOpen(false)}
+        />
+      )}
+
+      {analyticsOpen && (
+        <AnalyticsModal 
+          activityLogs={activityLogs}
+          onClose={() => setAnalyticsOpen(false)}
         />
       )}
     </div>

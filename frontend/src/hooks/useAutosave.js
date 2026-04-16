@@ -7,11 +7,11 @@ export const useAutosave = (apiUrl, content, roomId, userName, userColor, lastSn
   const autoSaveTimerRef = useRef(null);
   const autoSaveMessageTimerRef = useRef(null);
 
-  const saveSnapshot = async (contentToSave, mode = "manual") => {
+  const saveSnapshot = async (contentToSave, mode = "manual", tag = "") => {
     const isAuto = mode === "auto";
 
     if (!contentToSave.trim()) return;
-    if (contentToSave === lastSnapshotContentRef.current) return;
+    if (contentToSave === lastSnapshotContentRef.current && !tag) return;
 
     try {
       if (!isAuto) setSavingSnapshot(true);
@@ -27,6 +27,7 @@ export const useAutosave = (apiUrl, content, roomId, userName, userColor, lastSn
           savedBy: userName,
           savedByColor: userColor,
           mode,
+          tag,
         }),
       });
 

@@ -21,7 +21,10 @@ const docsRoutes = require("./routes/docs");
 const authMiddleware = require("./middleware/auth");
 
 app.use("/api/auth", authRoutes);
-app.use("/api/docs", docsRoutes);
+app.use("/api/docs", (req, res, next) => {
+  req.io = io;
+  next();
+}, docsRoutes);
 
 const jwt = require("jsonwebtoken");
 
@@ -111,14 +114,15 @@ app.get("/api/document/:roomId", authMiddleware, async (req, res) => {
 
 app.post("/api/document/:roomId/snapshot", authMiddleware, async (req, res) => {
   try {
-    const { content, savedBy, savedByColor, mode } = req.body;
+    const { content, savedBy, savedByColor, mode, tag } = req.body;
     const roomId = req.params.roomId;
 
     const doc = await getDocWithAccess(roomId, req.user.userId);
     const finalContent = typeof content === "string" ? content : "";
 
     const latestSnapshot = await Snapshot.findOne({ roomId }).sort({ timestamp: -1 });
-    if (latestSnapshot && latestSnapshot.content === finalContent) {
+    // If auto mode and no structural changes, skip. (If manual, force save).
+    if (latestSnapshot && latestSnapshot.content === finalContent && !tag && mode === "auto") {
       return res.json({ success: true, message: "No change" });
     }
 
@@ -126,12 +130,52 @@ app.post("/api/document/:roomId/snapshot", authMiddleware, async (req, res) => {
     doc.updatedAt = new Date();
     await doc.save();
 
+    let aiSummary = "";
+    if (latestSnapshot && process.env.GROQ_API_KEY && finalContent !== latestSnapshot.content) {
+      try {
+        const { diffWords } = require('diff');
+        const Groq = require("groq-sdk");
+        const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+        
+        const changes = diffWords(latestSnapshot.content, finalContent);
+        let additions = [];
+        let deletions = [];
+        changes.forEach(p => {
+          if(p.added) additions.push(p.value.trim());
+          if(p.removed) deletions.push(p.value.trim());
+        });
+
+        const addedSnippet = additions.join(' ').substring(0, 500);
+        const deletedSnippet = deletions.join(' ').substring(0, 500);
+        
+        const promptInfo = `Additions: ${addedSnippet.length ? addedSnippet : "None"}\nDeletions: ${deletedSnippet.length ? deletedSnippet : "None"}`;
+
+        const completion = await groq.chat.completions.create({
+          messages: [
+            { role: "system", content: "You are a concise document summarizer. Give a 5 to 10 word summary of what changed based on Additions and Deletions. E.g. 'Added paragraph about pricing and fixed typos.' Keep it strictly one short sentence. No quotes." },
+            { role: "user", content: promptInfo }
+          ],
+          model: "llama3-8b-8192",
+          max_tokens: 40
+        });
+
+        aiSummary = completion.choices[0]?.message?.content || "Updated document.";
+      } catch (err) {
+        console.error("Groq AI Error:", err.message);
+        aiSummary = "Summary unavailable.";
+      }
+    } else if (!latestSnapshot) {
+      aiSummary = "Initial snapshot.";
+    }
+
     await Snapshot.create({
       roomId,
       content: finalContent,
       savedBy: savedBy || "Unknown User",
       savedByColor: savedByColor || "#4F46E5",
       timestamp: new Date(),
+      aiSummary: aiSummary || (tag ? "Tagged version." : "Auto saved."),
+      tag: tag || ""
     });
 
     await ActivityLog.create({
@@ -318,6 +362,10 @@ io.on("connection", (socket) => {
       const activityLogs = await ActivityLog.find({ roomId }).sort({ timestamp: 1 });
 
       socket.emit("initial-document", {
+        title: refreshedDoc.title,
+        isPublic: refreshedDoc.isPublic,
+        ownerId: refreshedDoc.ownerId ? refreshedDoc.ownerId.toString() : null,
+        type: refreshedDoc.type,
         content: refreshedDoc.content,
         snapshots: snapshots,
         activityLogs: activityLogs,

@@ -276,10 +276,18 @@ textarea {
 }
 
 .main-layout {
-  display: grid;
-  grid-template-columns: 1.7fr 0.9fr;
-  gap: 20px;
+  display: flex !important;
+  flex-direction: row;
+  height: calc(100vh - 90px);
+  gap: 0;
   padding: 20px;
+}
+
+.editor-wrapper {
+  flex: 1;
+  min-width: 300px;
+  display: flex;
+  flex-direction: column;
 }
 
 .editor-card,
@@ -292,10 +300,10 @@ textarea {
 }
 
 .editor-card {
-  padding: 20px;
-  min-height: calc(100vh - 120px);
+  flex: 1;
   display: flex;
   flex-direction: column;
+  padding: 20px;
 }
 
 .section-header {
@@ -395,13 +403,27 @@ textarea {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
 }
 
+.sidebar-wrapper {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 .sidebar {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 20px;
+  height: 100%;
+  overflow: hidden;
 }
 
 .sidebar-card {
   padding: 18px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
 }
 
 .sidebar-head-row {
@@ -414,9 +436,36 @@ textarea {
 
 .snapshot-list,
 .activity-list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   margin-top: 16px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Resizer Handle */
+.resizer-handle {
+  width: 24px;
+  cursor: col-resize;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.resizer-line {
+  width: 4px;
+  height: 60px;
+  background-color: #cbd5e1;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.resizer-handle:hover .resizer-line,
+.resizer-handle.is-resizing .resizer-line {
+  background-color: #4f46e5;
+  height: 80px;
 }
 
 .snapshot-item,
@@ -653,9 +702,20 @@ textarea {
 
 @media (max-width: 1024px) {
   .main-layout {
-    grid-template-columns: 1fr;
+    flex-direction: column !important;
+    height: auto;
+    gap: 20px;
   }
-
+  .resizer-handle {
+    display: none;
+  }
+  .sidebar-wrapper {
+    width: 100% !important;
+    height: auto;
+  }
+  .sidebar-card {
+    overflow: visible;
+  }
   .editor-card {
     min-height: 60vh;
   }

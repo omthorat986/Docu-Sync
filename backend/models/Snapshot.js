@@ -7,6 +7,8 @@ const SnapshotSchema = new mongoose.Schema(
     savedBy: { type: String, required: true },
     savedByColor: { type: String, default: "#4F46E5" },
     timestamp: { type: Date, default: Date.now },
+    aiSummary: { type: String, default: "" },
+    tag: { type: String, default: "" }
   },
   { versionKey: false }
 );

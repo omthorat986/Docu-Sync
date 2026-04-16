@@ -10,6 +10,8 @@ function Header({
   roomId,
   documentMeta,
   onTitleChange,
+  onVisibilityChange,
+  onOpenAnalytics,
 }) {
   const [copied, setCopied] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -39,9 +41,32 @@ function Header({
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ isPublic: !isPublic }),
       });
-      if (res.ok) window.location.reload();
-      else { const e = await res.json(); alert(e.error || 'Toggle failed'); }
+      if (res.ok) {
+        if (onVisibilityChange) onVisibilityChange(!isPublic);
+      } else { const e = await res.json(); alert(e.error || 'Toggle failed'); }
     } catch { alert('Failed to toggle visibility'); }
+  };
+
+  const handleAddCollaborator = async () => {
+    if (!isOwner) return;
+    const email = window.prompt("Enter the exact email address of the collaborator:");
+    if (!email || !email.trim()) return;
+
+    try {
+      const res = await fetch(`http://localhost:5001/api/docs/add-collaborator`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ roomId, email: email.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert("Collaborator dynamically added!");
+      } else {
+        alert(data.error || 'Failed to add collaborator. Are you sure they have an account?');
+      }
+    } catch {
+      alert('Network error while adding collaborator');
+    }
   };
 
   const startTitleEdit = () => {
@@ -122,23 +147,40 @@ function Header({
               {copied ? '✓ Copied!' : '📋 Copy Link'}
             </button>
             {isOwner && (
-              <button
-                onClick={toggleVisibility}
-                className="secondary-btn"
-                style={{
-                  minHeight: '30px', fontSize: '12px',
-                  background: isPublic ? '#ecfdf3' : '#fef2f2',
-                  color: isPublic ? '#166534' : '#991b1b',
-                }}
-              >
-                {isPublic ? '🌎 Public' : '🔒 Private'}
-              </button>
+              <>
+                <button
+                  onClick={handleAddCollaborator}
+                  className="secondary-btn"
+                  style={{ minHeight: '30px', fontSize: '12px' }}
+                >
+                  🤝 Add Collaborator
+                </button>
+                <button
+                  onClick={toggleVisibility}
+                  className="secondary-btn"
+                  style={{
+                    minHeight: '30px', fontSize: '12px',
+                    background: isPublic ? '#ecfdf3' : '#fef2f2',
+                    color: isPublic ? '#166534' : '#991b1b',
+                  }}
+                >
+                  {isPublic ? '🌎 Public' : '🔒 Private'}
+                </button>
+              </>
             )}
           </div>
         )}
       </div>
 
       <div className="topbar-right">
+        <button 
+          className="secondary-btn" 
+          onClick={onOpenAnalytics}
+          style={{ minHeight: '30px', fontSize: '12px' }}
+        >
+          📊 Analytics
+        </button>
+
         <div className="header-pill auto-pill">{autoSaveMessage}</div>
 
         <div className="user-badges">
@@ -152,9 +194,25 @@ function Header({
 
         <div className="current-user-pill">You: <strong>{currentUser.userName}</strong></div>
 
-        <button className="primary-btn" onClick={onSaveSnapshot} disabled={savingSnapshot}>
-          {savingSnapshot ? 'Saving...' : 'Save Snapshot'}
-        </button>
+        <div style={{ position: 'relative', display: 'flex' }}>
+          <button className="primary-btn" onClick={() => onSaveSnapshot('')} disabled={savingSnapshot} style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
+            {savingSnapshot ? 'Saving...' : 'Save Snapshot'}
+          </button>
+          <button 
+            className="primary-btn" 
+            style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeft: '1px solid rgba(255,255,255,0.2)', padding: '0 8px' }}
+            onClick={() => {
+              const tag = window.prompt("Enter a tag for this version (e.g. v1.0, Final Review):");
+              if (tag !== null) {
+                onSaveSnapshot(tag.trim());
+              }
+            }}
+            title="Save with Tag"
+            disabled={savingSnapshot}
+          >
+            🏷
+          </button>
+        </div>
       </div>
     </header>
   );

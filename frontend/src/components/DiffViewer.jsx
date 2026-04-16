@@ -1,5 +1,22 @@
 import { diffLines, diffWords } from "diff";
 
+function extractPlainText(content) {
+  if (!content) return '';
+  if (typeof content !== 'string') return '';
+  try {
+    const delta = JSON.parse(content);
+    if (delta && Array.isArray(delta.ops)) {
+      return delta.ops
+        .map(op => (typeof op.insert === 'string' ? op.insert : ' '))
+        .join('')
+        .trim();
+    }
+  } catch {
+    // not JSON, use as-is
+  }
+  return content;
+}
+
 function hexToRgba(hex, alpha) {
   if (!hex) return `rgba(79, 70, 229, ${alpha})`;
 
@@ -77,7 +94,7 @@ function DiffViewer({
   currentUserColor,
   onClose,
 }) {
-  const lineParts = diffLines(oldText || "", newText || "");
+  const lineParts = diffLines(extractPlainText(oldText) || '', extractPlainText(newText) || '');
 
   const grouped = [];
   for (let i = 0; i < lineParts.length; i += 1) {

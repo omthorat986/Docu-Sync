@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback, useState } from 'react';
+import React, { useRef, useEffect, useCallback, useState, useImperativeHandle, forwardRef } from 'react';
 import Quill from 'quill';
 import QuillCursors from 'quill-cursors';
 import 'quill/dist/quill.snow.css';
@@ -44,9 +44,10 @@ function escapeHtml(s) {
 }
 
 // ─── Rich-text Quill editor (direct DOM init, React 19 safe) ─────────────────
-function RichEditor({ content, onChange, remoteCursors, socket, roomId, userName, userColor }) {
+const RichEditor = forwardRef(({ content, onChange, remoteCursors, socket, roomId, userName, userColor }, ref) => {
   const containerRef = useRef(null);
   const quillRef = useRef(null);
+  const lastRemoteContent = useRef(content);
   const cursorsModuleRef = useRef(null);
   const isRemoteRef = useRef(false);
   const onChangeRef = useRef(onChange);
@@ -79,19 +80,22 @@ function RichEditor({ content, onChange, remoteCursors, socket, roomId, userName
     try {
       const delta = JSON.parse(content);
       q.setContents(delta, 'silent');
+      lastRemoteContent.current = content;
     } catch {
       q.setText(content || '', 'silent');
+      lastRemoteContent.current = content || '';
     }
 
     // Listen for local edits
     q.on('text-change', (delta, oldDelta, source) => {
       if (isRemoteRef.current || source !== 'user') return;
       const fullDelta = q.getContents();
-      onChangeRef.current(JSON.stringify(fullDelta));
+      const stringified = JSON.stringify(fullDelta);
+      lastRemoteContent.current = stringified; // identify as "known" to prevent prop-feedback loop
+      onChangeRef.current(stringified);
     });
 
     return () => {
-      // Quill 1.x has no official destroy(), remove the toolbar manually
       const toolbar = q.getModule('toolbar');
       if (toolbar && toolbar.container) toolbar.container.remove();
       q.off('text-change');
@@ -99,13 +103,33 @@ function RichEditor({ content, onChange, remoteCursors, socket, roomId, userName
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Sync with 'content' prop (fallback for external state changes like Restore)
+  useEffect(() => {
+    const q = quillRef.current;
+    if (!q || content === lastRemoteContent.current) return;
+
+    isRemoteRef.current = true;
+    try {
+      const delta = JSON.parse(content);
+      q.setContents(delta, 'silent');
+    } catch {
+      q.setText(content || '', 'silent');
+    }
+    lastRemoteContent.current = content;
+    isRemoteRef.current = false;
+  }, [content]);
+
   // Apply incoming content changes from socket (without echo loop)
   useEffect(() => {
     if (!socket) return;
 
-    const handler = (data) => {
+    const applyRemoteContent = (data) => {
       const q = quillRef.current;
       if (!q || !data.content) return;
+      
+      // If we already have this content (from prop sync or previous event), skip
+      if (data.content === lastRemoteContent.current) return;
+
       isRemoteRef.current = true;
       try {
         const incoming = JSON.parse(data.content);
@@ -116,14 +140,18 @@ function RichEditor({ content, onChange, remoteCursors, socket, roomId, userName
           if (sel) q.setSelection(sel, 'silent');
         }
       } catch {
-        // plain-text fallback
         q.setText(data.content || '', 'silent');
       }
+      lastRemoteContent.current = data.content;
       isRemoteRef.current = false;
     };
 
-    socket.on('receive-changes', handler);
-    return () => socket.off('receive-changes', handler);
+    socket.on('receive-changes', applyRemoteContent);
+    socket.on('document-updated', applyRemoteContent);
+    return () => {
+      socket.off('receive-changes', applyRemoteContent);
+      socket.off('document-updated', applyRemoteContent);
+    };
   }, [socket]);
 
   // Render remote cursors via quill-cursors
@@ -138,21 +166,22 @@ function RichEditor({ content, onChange, remoteCursors, socket, roomId, userName
     });
   }, [remoteCursors]);
 
-  // Export helpers exposed via window for the parent component
-  const getPlainText = () => quillRef.current?.getText() || '';
-  const getHtml     = () => containerRef.current?.querySelector('.ql-editor')?.innerHTML || '';
-
-  // Expose methods via ref trick
-  if (containerRef._exportRef === undefined) {
-    containerRef._exportRef = { getPlainText, getHtml };
-  }
+  useImperativeHandle(ref, () => ({
+    getPlainText: () => quillRef.current?.getText() || '',
+    getHtml: () => containerRef.current?.querySelector('.ql-editor')?.innerHTML || '',
+    setLocalContent: (newContent) => {
+      const q = quillRef.current;
+      if (!q) return;
+      q.setText(newContent || '', 'user'); // Triggers 'text-change' with 'user' source
+    }
+  }));
 
   return (
     <div className="quill-wrapper">
       <div ref={containerRef} />
     </div>
   );
-}
+});
 
 // ─── Plain-text / code editor ────────────────────────────────────────────────
 function PlainEditor({ content, onChange, remoteCursors, sendCursorMove, placeholder, isCode }) {
@@ -200,6 +229,7 @@ function EditorPanel({
   remoteCursors, sendCursorMove,
   docType = 'text', docTitle = 'Document',
   socket, roomId, userName, userColor,
+  sidebarVisible, onToggleSidebar
 }) {
   const [exportOpen, setExportOpen] = useState(false);
   const richEditorRef = useRef(null);
@@ -232,6 +262,30 @@ function EditorPanel({
 
   const typeBadge = { text: { bg: '#eef2ff', color: '#4f46e5' }, code: { bg: '#fef9c3', color: '#854d0e' }, notes: { bg: '#f0fdf4', color: '#166534' } }[docType] || {};
 
+  const fileInputRef = useRef(null);
+
+  const handleImportClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target.result;
+      if (docType === 'text' && richEditorRef.current) {
+        richEditorRef.current.setLocalContent(result);
+      } else {
+        onChange(result);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = null;
+  };
+
   return (
     <section className="editor-card">
       <div className="section-header">
@@ -240,6 +294,20 @@ function EditorPanel({
           <span className="type-badge" style={{ background: typeBadge.bg, color: typeBadge.color }}>{docType}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            style={{ display: 'none' }} 
+            onChange={handleFileChange}
+            accept=".txt,.html,.json,.js,.md" 
+          />
+          <button 
+            className="secondary-btn" 
+            style={{ minHeight: 30, fontSize: 12 }}
+            onClick={handleImportClick}
+          >
+            ⬆ Import
+          </button>
           <div style={{ position: 'relative' }}>
             <button className="secondary-btn" style={{ minHeight: 30, fontSize: 12 }}
               onClick={() => setExportOpen(o => !o)}>
@@ -254,6 +322,13 @@ function EditorPanel({
             )}
           </div>
           <div className="live-indicator"><span className="live-dot" />Live Sync</div>
+          <button 
+            className="secondary-btn" 
+            style={{ minHeight: 30, fontSize: 12 }}
+            onClick={onToggleSidebar}
+          >
+            {sidebarVisible ? 'Hide Sidebar' : 'Show Sidebar'}
+          </button>
         </div>
       </div>
 

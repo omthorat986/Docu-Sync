@@ -43,11 +43,10 @@ export const useDocument = (socket, roomId, userName, userColor, token) => {
     };
 
     const handleReceiveChanges = (data) => {
-      if (isRemoteChange.current) return;
-      isRemoteChange.current = true;
+      // Update React state so PlainEditor (code/notes) re-renders with new content.
+      // RichEditor handles its own deduplication via its internal isRemoteRef.
       setContent(data.content || '');
       setLastEditedBy(data.userName || '');
-      isRemoteChange.current = false;
     };
 
     const handleUsersUpdated = (users) => {
@@ -67,9 +66,9 @@ export const useDocument = (socket, roomId, userName, userColor, token) => {
     };
 
     const handleDocumentUpdated = (data) => {
-      isRemoteChange.current = true;
+      if (!data || data.content === undefined) return;
       setContent(data.content || '');
-      isRemoteChange.current = false;
+      setLastEditedBy(''); // clear banner on restore
     };
 
     const handleCursorUpdate = ({ userId, cursor }) => {
@@ -87,12 +86,20 @@ export const useDocument = (socket, roomId, userName, userColor, token) => {
       });
     };
 
+    const handleDocumentMetaUpdated = (data) => {
+      setDocumentMeta((prev) => ({
+        ...prev,
+        ...data
+      }));
+    };
+
     socket.on("initial-document", handleInitialDocument);
     socket.on("receive-changes", handleReceiveChanges);
     socket.on("users-updated", handleUsersUpdated);
     socket.on("snapshots-updated", handleSnapshotsUpdated);
     socket.on("activity-updated", handleActivityUpdated);
     socket.on("document-updated", handleDocumentUpdated);
+    socket.on("document-meta-updated", handleDocumentMetaUpdated);
     socket.on("cursor-update", handleCursorUpdate);
     socket.on("user-left", handleUserLeft);
 
@@ -103,6 +110,7 @@ export const useDocument = (socket, roomId, userName, userColor, token) => {
       socket.off("snapshots-updated", handleSnapshotsUpdated);
       socket.off("activity-updated", handleActivityUpdated);
       socket.off("document-updated", handleDocumentUpdated);
+      socket.off("document-meta-updated", handleDocumentMetaUpdated);
       socket.off("cursor-update", handleCursorUpdate);
       socket.off("user-left", handleUserLeft);
       
@@ -114,7 +122,6 @@ export const useDocument = (socket, roomId, userName, userColor, token) => {
   }, [socket]);
 
   const updateContent = (newContent) => {
-    if (isRemoteChange.current) return;
     setContent(newContent);
     setLastEditedBy(userName);
 
@@ -123,7 +130,7 @@ export const useDocument = (socket, roomId, userName, userColor, token) => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
         socket.emit('send-changes', { roomId, content: newContent, userName, token });
-      }, 300);
+      }, 100);
 
       if (logTimeoutRef.current) clearTimeout(logTimeoutRef.current);
       logTimeoutRef.current = setTimeout(() => {

@@ -16,6 +16,12 @@ function Dashboard({ setToken }) {
   const [creatingDoc, setCreatingDoc] = useState(false);
   const [renamingId, setRenamingId] = useState(null);
   const [renameVal, setRenameVal] = useState('');
+  const [shareModalDoc, setShareModalDoc] = useState(null);
+  const [collabEmail, setCollabEmail] = useState('');
+  const [collabStatus, setCollabStatus] = useState('');
+  const [addingCollab, setAddingCollab] = useState(false);
+  const [togglingVisibility, setTogglingVisibility] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
   const navigate = useNavigate();
 
   const token = localStorage.getItem('docu-sync-token');
@@ -90,6 +96,68 @@ function Dashboard({ setToken }) {
       setDocs(docs.map(d => d.roomId === roomId ? { ...d, title: trimmed } : d));
     } catch (err) { alert(err.message); }
     finally { setRenamingId(null); }
+  };
+
+  const openShareModal = (doc) => {
+    setShareModalDoc(doc);
+    setCollabEmail('');
+    setCollabStatus('');
+    setCopiedLink(false);
+  };
+
+  const toggleVisibility = async () => {
+    if (!shareModalDoc) return;
+    setTogglingVisibility(true);
+    try {
+      const res = await fetch(`http://localhost:5001/api/docs/${shareModalDoc.roomId}/visibility`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ isPublic: !shareModalDoc.isPublic }),
+      });
+      if (res.ok) {
+        const updated = { ...shareModalDoc, isPublic: !shareModalDoc.isPublic };
+        setShareModalDoc(updated);
+        setDocs(docs.map(d => d.roomId === updated.roomId ? { ...d, isPublic: updated.isPublic } : d));
+      } else {
+        const e = await res.json();
+        alert(e.error || 'Failed to toggle visibility');
+      }
+    } catch {
+      alert('Failed to toggle visibility');
+    } finally {
+      setTogglingVisibility(false);
+    }
+  };
+
+  const handleAddCollaborator = async (e) => {
+    e.preventDefault();
+    if (!collabEmail.trim() || !shareModalDoc) return;
+    setAddingCollab(true);
+    setCollabStatus('');
+    try {
+      const res = await fetch('http://localhost:5001/api/docs/add-collaborator', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ roomId: shareModalDoc.roomId, email: collabEmail.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setCollabStatus('✅ Collaborator added successfully!');
+        setCollabEmail('');
+      } else {
+        setCollabStatus(`❌ ${data.error || 'Failed to add collaborator'}`);
+      }
+    } catch {
+      setCollabStatus('❌ Network error while adding collaborator');
+    } finally {
+      setAddingCollab(false);
+    }
+  };
+
+  const handleCopyLink = (roomId) => {
+    navigator.clipboard.writeText(`${window.location.origin}/doc/${roomId}`);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
   const handleLogout = () => {
@@ -177,7 +245,9 @@ function Dashboard({ setToken }) {
                   {isOwner
                     ? <span style={{ fontSize: 11, background: '#eef2ff', color: '#4f46e5', padding: '2px 8px', borderRadius: 99, fontWeight: 700 }}>Owner</span>
                     : <span style={{ fontSize: 11, background: '#f1f5f9', color: '#64748b', padding: '2px 8px', borderRadius: 99, fontWeight: 700 }}>Collaborator</span>}
-                  {doc.isPublic && <span style={{ fontSize: 11, background: '#ecfdf3', color: '#166534', padding: '2px 8px', borderRadius: 99, fontWeight: 700 }}>Public</span>}
+                  {doc.isPublic
+                    ? <span style={{ fontSize: 11, background: '#ecfdf3', color: '#166534', padding: '2px 8px', borderRadius: 99, fontWeight: 700 }}>🌎 Public</span>
+                    : <span style={{ fontSize: 11, background: '#fef2f2', color: '#991b1b', padding: '2px 8px', borderRadius: 99, fontWeight: 700 }}>🔒 Private</span>}
                 </div>
                 <div style={{ fontSize: 12, color: '#94a3b8' }}>
                   Last updated: {new Date(doc.updatedAt).toLocaleString()}
@@ -187,6 +257,7 @@ function Dashboard({ setToken }) {
               <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                 <button onClick={() => navigate(`/doc/${doc.roomId}`)} className="primary-btn" style={{ minHeight: 34, fontSize: 13 }}>Open</button>
                 {isOwner && <>
+                  <button onClick={() => openShareModal(doc)} className="secondary-btn" style={{ minHeight: 34, fontSize: 13, background: '#eef2ff', color: '#4f46e5' }}>🔗 Share</button>
                   <button onClick={() => startRename(doc)} className="secondary-btn" style={{ minHeight: 34, fontSize: 13 }}>Rename</button>
                   <button onClick={() => handleDelete(doc.roomId)} className="secondary-btn" style={{ minHeight: 34, fontSize: 13, color: '#dc2626', background: '#fef2f2' }}>Delete</button>
                 </>}
@@ -241,6 +312,123 @@ function Dashboard({ setToken }) {
                 {creatingDoc ? 'Creating…' : 'Create Document'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share / Collaborate modal */}
+      {shareModalDoc && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)',
+          display: 'grid', placeItems: 'center', zIndex: 1000,
+        }} onClick={(e) => { if (e.target === e.currentTarget) setShareModalDoc(null); }}>
+          <div style={{
+            background: '#fff', borderRadius: 20, padding: 32,
+            width: 'min(520px, 92vw)', boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <h2 style={{ margin: 0 }}>Share Document</h2>
+              <button onClick={() => setShareModalDoc(null)} className="secondary-btn" style={{ fontSize: 18, padding: '0 10px', minHeight: 34 }}>✕</button>
+            </div>
+            <p style={{ color: '#64748b', marginBottom: 24, fontSize: 14 }}>
+              {shareModalDoc.title || 'Untitled Document'}
+            </p>
+
+            {/* Visibility toggle */}
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              padding: '16px 18px', borderRadius: 14, marginBottom: 20,
+              background: shareModalDoc.isPublic ? '#ecfdf3' : '#fef2f2',
+              border: `1px solid ${shareModalDoc.isPublic ? '#bbf7d0' : '#fecaca'}`,
+              transition: 'all 0.2s ease',
+            }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: shareModalDoc.isPublic ? '#166534' : '#991b1b' }}>
+                  {shareModalDoc.isPublic ? '🌎 Public Document' : '🔒 Private Document'}
+                </div>
+                <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                  {shareModalDoc.isPublic
+                    ? 'Anyone with the link can view and edit this document'
+                    : 'Only you and added collaborators can access this document'}
+                </div>
+              </div>
+              <button
+                onClick={toggleVisibility}
+                disabled={togglingVisibility}
+                className="secondary-btn"
+                style={{
+                  minHeight: 36, fontSize: 13, fontWeight: 700,
+                  background: shareModalDoc.isPublic ? '#fef2f2' : '#ecfdf3',
+                  color: shareModalDoc.isPublic ? '#991b1b' : '#166534',
+                }}
+              >
+                {togglingVisibility ? 'Updating…' : (shareModalDoc.isPublic ? 'Make Private' : 'Make Public')}
+              </button>
+            </div>
+
+            {/* Copy shareable link */}
+            <div style={{
+              display: 'flex', gap: 10, marginBottom: 20,
+              padding: '12px 14px', background: '#f8fafc', borderRadius: 12,
+              border: '1px solid #e5e7eb', alignItems: 'center',
+            }}>
+              <input
+                readOnly
+                value={`${window.location.origin}/doc/${shareModalDoc.roomId}`}
+                style={{
+                  flex: 1, border: 'none', background: 'transparent',
+                  fontSize: 13, color: '#475569', outline: 'none',
+                  fontFamily: 'monospace',
+                }}
+                onClick={(e) => e.target.select()}
+              />
+              <button
+                onClick={() => handleCopyLink(shareModalDoc.roomId)}
+                className="primary-btn"
+                style={{ minHeight: 34, fontSize: 12, padding: '0 16px' }}
+              >
+                {copiedLink ? '✓ Copied!' : '📋 Copy Link'}
+              </button>
+            </div>
+
+            {/* Divider */}
+            <div style={{ height: 1, background: '#e5e7eb', margin: '20px 0' }} />
+
+            {/* Add collaborator */}
+            <h3 style={{ margin: '0 0 8px', fontSize: 16 }}>🤝 Add Collaborator</h3>
+            <p style={{ color: '#64748b', fontSize: 13, margin: '0 0 14px' }}>
+              Invite a registered user by their email address to edit this document.
+            </p>
+            <form onSubmit={handleAddCollaborator} style={{ display: 'flex', gap: 10, marginBottom: 8 }}>
+              <input
+                type="email"
+                placeholder="collaborator@example.com"
+                value={collabEmail}
+                onChange={(e) => setCollabEmail(e.target.value)}
+                style={{
+                  flex: 1, height: 42, border: '1px solid #d0d7e2', borderRadius: 12,
+                  padding: '0 14px', outline: 'none', fontSize: 14,
+                }}
+              />
+              <button
+                type="submit"
+                className="primary-btn"
+                disabled={addingCollab || !collabEmail.trim()}
+                style={{ minHeight: 42, fontSize: 13 }}
+              >
+                {addingCollab ? 'Adding…' : 'Add'}
+              </button>
+            </form>
+            {collabStatus && (
+              <div style={{
+                fontSize: 13, fontWeight: 600, padding: '8px 12px',
+                borderRadius: 10, marginTop: 8,
+                background: collabStatus.startsWith('✅') ? '#ecfdf3' : '#fef2f2',
+                color: collabStatus.startsWith('✅') ? '#166534' : '#dc2626',
+              }}>
+                {collabStatus}
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -42,8 +42,13 @@ function Sidebar({
                   }`}
                 >
                   <div className="snapshot-info">
-                    <div className="version-title-row">
+                    <div className="version-title-row" style={{ marginBottom: '4px' }}>
                       <strong>Version {reversedSnapshots.length - index}</strong>
+                      {snapshot.tag && (
+                        <span className="type-badge" style={{ background: '#fef3c7', color: '#92400e' }}>
+                          🏷 {snapshot.tag}
+                        </span>
+                      )}
                       <span
                         className="mini-user-pill"
                         style={{
@@ -60,6 +65,11 @@ function Sidebar({
                         {snapshot.savedBy}
                       </span>
                     </div>
+                    {snapshot.aiSummary && (
+                      <p style={{ margin: '4px 0', fontSize: '13px', color: '#374151', lineHeight: '1.4' }}>
+                        ✨ {snapshot.aiSummary}
+                      </p>
+                    )}
                     <small>{formatTime(snapshot.timestamp)}</small>
                   </div>
 
